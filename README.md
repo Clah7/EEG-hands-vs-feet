@@ -12,7 +12,6 @@ The primary goal is to build a robust classifier for Brain-Computer Interface (B
 - [Installation](#-installation)
 - [Usage](#-usage)
 - [Results](#-results)
-- [License](#-license)
 
 ## About The Project
 
@@ -48,8 +47,6 @@ The project workflow is divided into several key stages:
     * **CNN** 
 
 3.  **Training & Evaluation:**
-    * Models are trained using [e.g., Adam optimizer] with [e.g., categorical cross-entropy] loss.
-    * Performance is evaluated using accuracy, precision, recall, F1-score, and confusion matrices.
 
 ## Installation
 
