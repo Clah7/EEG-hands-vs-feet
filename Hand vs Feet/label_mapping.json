@@ -1,0 +1,13 @@
+{
+    "class_mapping": {
+        "0": "T1 (Hands)",
+        "1": "T2 (Feet)"
+    },
+    "sampling_rate": 160,
+    "input_shape": [
+        64,
+        881,
+        1
+    ],
+    "note": "Output 0 is Hands, Output 1 is Feet"
+}
