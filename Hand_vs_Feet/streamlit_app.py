@@ -12,6 +12,7 @@ from mne.datasets import eegbci
 from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
 import pandas as pd
 
+# --- KONFIGURASI HALAMAN ---
 st.set_page_config(
     page_title="EEG Model Evaluation",
     page_icon="📊",
@@ -24,11 +25,12 @@ Aplikasi ini mengevaluasi performa model pada **seluruh event** yang ada dalam f
 Ia membandingkan **Prediksi Model** vs **Label Asli (Marker T1/T2)**.
 """)
 
+# --- FUNGSI LOAD ASSETS (Dengan Path Absolute) ---
 @st.cache_resource
 def load_assets():
     try:
         import os
-        # 1. Dapatkan lokasi absolut file script ini (streamlit_app.py) berada
+        # 1. Dapatkan lokasi absolut file script ini berada
         base_dir = os.path.dirname(os.path.abspath(__file__))
 
         # 2. Sambungkan lokasi folder tersebut dengan nama file model
@@ -36,7 +38,7 @@ def load_assets():
         mapping_path = os.path.join(base_dir, 'label_mapping.json')
         scaler_path = os.path.join(base_dir, 'scaler_raw.pkl')
 
-        # 3. Load menggunakan path lengkap (absolut) tadi
+        # 3. Load aset
         model = tf.keras.models.load_model(model_path)
         
         with open(mapping_path, 'r') as f:
@@ -53,6 +55,7 @@ def load_assets():
 model, mapping_info, scaler_info = load_assets()
 
 if mapping_info is None:
+    # Fallback jika json gagal load
     mapping_info = {
         'input_shape': [64, 881],
         'sampling_rate': 160,
@@ -60,6 +63,7 @@ if mapping_info is None:
     }
     scaler_info = {'type': 'none'}
 
+# --- FUNGSI PROSES DATA ---
 def process_edf_batch(file_path, target_fs=160):
     """
     Mengambil SEMUA epoch T1 dan T2 dari file untuk evaluasi batch.
@@ -116,51 +120,84 @@ def process_edf_batch(file_path, target_fs=160):
         st.error(f"Error processing: {e}")
         return None, None
 
+# ==============================================================================
+# BAGIAN DI BAWAH INI ADALAH LOGIKA BARU (SESSION STATE)
+# ==============================================================================
+
+# Inisialisasi Session State agar data tidak hilang saat tombol diklik
+if 'file_path' not in st.session_state:
+    st.session_state['file_path'] = None
+if 'data_source' not in st.session_state:
+    st.session_state['data_source'] = None
+
 st.sidebar.header("📂 Sumber Data Evaluasi")
 input_source = st.sidebar.radio("Pilih Sumber:", ("MNE Dataset (Online)", "Upload File (.edf)"))
 
-file_path = None
-temp_file = None
-
+# --- LOGIKA UPLOAD FILE ---
 if input_source == "Upload File (.edf)":
     uploaded = st.sidebar.file_uploader("Upload .edf", type=['edf'])
     if uploaded:
+        # Simpan ke temp file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".edf")
         temp_file.write(uploaded.getvalue())
         temp_file.close()
-        file_path = temp_file.name
+        
+        # Update Session State
+        st.session_state['file_path'] = temp_file.name
+        st.session_state['data_source'] = 'upload'
 
+# --- LOGIKA MNE ONLINE ---
 else:
     st.sidebar.info("Dataset: EEGBCI (Motor Execution)")
     subject_id = st.sidebar.number_input("Subject ID (1-109)", 1, 109, 1)
-    
+    # Run 5, 9, 13 (Motor Execution: Hands vs Feet)
     run_id = st.sidebar.selectbox("Run (Task 4: Hands vs Feet)", [5, 9, 13])
     
     if st.sidebar.button("Load Data"):
         with st.spinner("Downloading..."):
-            paths = eegbci.load_data(subject_id, [run_id], update_path=True, verbose=False)
-            file_path = paths[0]
-            st.sidebar.success(f"File loaded: {os.path.basename(file_path)}")
+            try:
+                paths = eegbci.load_data(subject_id, [run_id], update_path=True, verbose=False)
+                
+                # Update Session State
+                st.session_state['file_path'] = paths[0]
+                st.session_state['data_source'] = 'online'
+                
+                st.sidebar.success(f"File loaded: {os.path.basename(paths[0])}")
+            except Exception as e:
+                st.sidebar.error(f"Gagal download: {e}")
 
-if file_path and model:
+# Tampilkan info file yang sedang aktif di Sidebar
+if st.session_state['file_path']:
+    fname = os.path.basename(st.session_state['file_path'])
+    st.sidebar.markdown(f"✅ **Data Aktif:** `{fname}`")
+
+# --- LOGIKA EKSEKUSI UTAMA (MENGGUNAKAN SESSION STATE) ---
+if st.session_state['file_path'] and model:
+    # Tombol jalankan evaluasi
     if st.button("🚀 Jalankan Evaluasi Full", type="primary"):
         with st.spinner("Memproses seluruh epoch & memprediksi..."):
             
-            X, y_true = process_edf_batch(file_path)
+            # Panggil fungsi process menggunakan path dari session state
+            X, y_true = process_edf_batch(st.session_state['file_path'])
             
             if X is not None:
+                # Preprocessing scaler
                 if scaler_info.get('type') == 'manual_multiplier':
                     X_processed = X * scaler_info['factor']
                 else:
                     X_processed = X
                 
+                # Reshape untuk model
                 X_input = X_processed.reshape(X.shape[0], 64, 881, 1)
                 
+                # Prediksi
                 y_probs = model.predict(X_input, verbose=0)
                 y_pred = (y_probs > 0.5).astype(int).flatten()
                 
+                # Hitung Akurasi
                 acc = accuracy_score(y_true, y_pred)
                 
+                # --- TAMPILKAN HASIL ---
                 col_metrics, col_matrix = st.columns([1, 2])
                 
                 with col_metrics:
@@ -187,29 +224,28 @@ if file_path and model:
                     ax.set_xlabel('Prediksi Model', fontsize=12)
                     st.pyplot(fig)
                 
+                # Analisis Error
                 st.subheader("🔍 Analisis Error")
                 if acc < 1.0:
-                    st.write("Epoch yang salah diprediksi:")
+                    st.write("Contoh epoch yang salah diprediksi:")
                     incorrect_indices = np.where(y_true != y_pred)[0]
                     
-                    idx_err = incorrect_indices[0]
-                    true_label_str = "Hands" if y_true[idx_err] == 0 else "Feet"
-                    pred_label_str = "Hands" if y_pred[idx_err] == 0 else "Feet"
-                    
-                    st.warning(f"Epoch ke-{idx_err} | Asli: **{true_label_str}** | Prediksi: **{pred_label_str}**")
-                    
-                    fig_err, ax_err = plt.subplots(figsize=(10, 3))
-                    ax_err.plot(X[idx_err, 0, :], label='Ch 1') 
-                    ax_err.plot(X[idx_err, 10, :], label='Ch 10')
-                    ax_err.set_title(f"Sinyal Epoch {idx_err} (Misclassified)")
-                    st.pyplot(fig_err)
+                    if len(incorrect_indices) > 0:
+                        idx_err = incorrect_indices[0]
+                        true_label_str = "Hands" if y_true[idx_err] == 0 else "Feet"
+                        pred_label_str = "Hands" if y_pred[idx_err] == 0 else "Feet"
+                        
+                        st.warning(f"Epoch ke-{idx_err} | Asli: **{true_label_str}** | Prediksi: **{pred_label_str}**")
+                        
+                        fig_err, ax_err = plt.subplots(figsize=(10, 3))
+                        ax_err.plot(X[idx_err, 0, :], label='Ch 1') 
+                        ax_err.plot(X[idx_err, 10, :], label='Ch 10')
+                        ax_err.set_title(f"Sinyal Epoch {idx_err} (Misclassified)")
+                        st.pyplot(fig_err)
                 else:
                     st.success("Sempurna! Semua epoch diprediksi dengan benar.")
 
-    if temp_file:
-        os.remove(file_path)
-
-elif not file_path:
+elif not st.session_state['file_path']:
     st.info("👈 Silakan load data dari sidebar untuk memulai evaluasi.")
 elif not model:
     st.error("Model tidak ditemukan.")
